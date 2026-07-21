@@ -229,10 +229,21 @@ textarea {
   padding: 15px;
   display: grid;
   gap: 6px;
+  min-width: 0;
+  align-content: start;
+  justify-items: start;
+}
+
+.account strong,
+.account > span:not(.actions) {
+  width: 100%;
+  text-align: left;
 }
 
 .account .actions {
   margin-top: 8px;
+  width: 100%;
+  justify-content: flex-start;
 }
 
 .account .actions button {
@@ -356,11 +367,107 @@ button.danger:hover {
   outline: 3px solid #0f8f7e;
 }
 
-.video img, .asset img {
+.video img, .asset img, .video-thumb-placeholder {
   width: 100%;
   aspect-ratio: 9 / 12;
   display: block;
   object-fit: cover;
+}
+
+.video-thumb-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  text-align: center;
+  background: linear-gradient(160deg, #1e293b, #0f172a);
+  color: #cbd5e1;
+  font-size: 0.85rem;
+  word-break: break-word;
+}
+
+/* Source card: “Include in fetch” row (isolated from global label { display: grid }) */
+.account-fetch-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 0;
+}
+
+.fetch-source-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  font-size: 0.8125rem;
+  line-height: 1.25;
+  user-select: none;
+}
+
+.fetch-source-check .fetch-source-checkbox,
+.fetch-source-check input[type="checkbox"][id^="fetch-acct_"] {
+  box-sizing: border-box;
+  width: 1em;
+  height: 1em;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 auto;
+  font-size: inherit;
+  accent-color: #3b82f6;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.fetch-source-check .fetch-source-label,
+.fetch-source-check label[for^="fetch-acct_"] {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  font-size: inherit;
+  font-weight: 500;
+  line-height: inherit;
+  color: #93a1b0;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.fetch-source-check:has(.fetch-source-checkbox:focus-visible) {
+  outline: 2px solid rgba(15, 143, 126, 0.55);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.fetch-source-checkbox:focus {
+  outline: none;
+}
+
+.fetch-source-checkbox:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.85);
+  outline-offset: 2px;
+}
+
+.fetch-hint {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(15, 143, 126, 0.08);
+  border: 1px solid rgba(15, 143, 126, 0.22);
+  color: #b8c5d0;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.fetch-hint strong {
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.account.selected {
+  outline: 2px solid rgba(15, 143, 126, 0.45);
 }
 
 .video button {

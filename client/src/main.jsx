@@ -87,6 +87,43 @@ function mediaUrl(src) {
   return src.startsWith("/storage") || src.startsWith("/defaults") ? `${apiBase}${src}` : src;
 }
 
+function normalizeReelShortcode(code) {
+  let value = String(code || "")
+    .replace(/[?#].*$/, "")
+    .trim();
+  value = value.replace(/_+$/g, "");
+  return value || "clip";
+}
+
+function extractReelIdFromUrl(url) {
+  const value = String(url || "").trim();
+  const match = value.match(/instagram\.com\/(?:[^/]+\/)?(?:p|reel|reels|tv)\/([^/?#]+)/i);
+  if (match) return normalizeReelShortcode(match[1]);
+  const parts = value.split(/[/?#]/).filter(Boolean);
+  for (let i = 1; i < parts.length; i += 1) {
+    if (/^(p|reel|reels|tv)$/i.test(parts[i - 1])) return normalizeReelShortcode(parts[i]);
+  }
+  return normalizeReelShortcode(parts[parts.length - 1] || "clip");
+}
+
+function accountManualUrls(account) {
+  return (account.urls || []).map((line) => String(line).trim()).filter(Boolean);
+}
+
+function accountSourceTitle(account) {
+  const urls = accountManualUrls(account);
+  if (!urls.length) return `@${account.handle}`;
+  if (urls.length === 1) return `manual-reels-${extractReelIdFromUrl(urls[0])}`;
+  return urls.map((url) => `manual-reels-${extractReelIdFromUrl(url)}`).join(", ");
+}
+
+function accountSourceKind(account) {
+  const urlCount = accountManualUrls(account).length;
+  if (urlCount) return `${urlCount} manual URL${urlCount === 1 ? "" : "s"}`;
+  if (account.mode === "mock") return "mock discovery adapter";
+  return "live reel scraping";
+}
+
 // The browser ignores the <a download> attribute for cross-origin URLs (the API
 // runs on a different port), so fetch the file as a blob and save it directly.
 async function downloadFile(src, filename) {
@@ -199,18 +236,25 @@ function StudioShell() {
     await refresh();
   }
 
-  async function discover() {
+  async function discover(accountIds) {
+    if (!accountIds?.length) {
+      window.alert("Select at least one source to fetch.");
+      return;
+    }
     setBusy(true);
     try {
-      const result = await api("/api/discover", { method: "POST", body: JSON.stringify({}) });
+      const result = await api("/api/discover", {
+        method: "POST",
+        body: JSON.stringify({ accountIds })
+      });
       const found = Array.isArray(result) ? result : result?.videos || [];
       const errors = Array.isArray(result) ? [] : result?.errors || [];
-      setVideos(found);
+      await refresh();
       setPage("instagram");
       if (errors.length) {
         const detail = errors.map((item) => `@${item.handle}: ${item.message}`).join("\n");
-        if (found.length) window.alert(`Fetched ${found.length} videos. Some accounts could not be fetched:\n\n${detail}`);
-        else window.alert(`No videos fetched.\n\n${detail}`);
+        if (found.length) window.alert(`Fetched ${found.length} new videos for selected sources. Some sources failed:\n\n${detail}`);
+        else window.alert(`No videos fetched for selected sources.\n\n${detail}`);
       }
     } finally {
       setBusy(false);
@@ -368,6 +412,16 @@ function StudioShell() {
     await refresh();
   }
 
+  async function updateUser(id, payload) {
+    await api(`/api/users/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+    await refresh();
+  }
+
+  async function deleteUser(id) {
+    await api(`/api/users/${id}`, { method: "DELETE" });
+    await refresh();
+  }
+
   async function uploadMedia(file) {
     const body = new FormData();
     body.append("media", file);
@@ -469,7 +523,15 @@ function StudioShell() {
           />
         )}
         {page === "exports" && <ExportQueue jobs={jobs} onRefresh={refresh} onDeleteJob={deleteJob} retentionHours={config.retentionHours} />}
-        {page === "settings" && <SettingsPage users={users} onAddUser={addUser} onCookieUpload={uploadInstagramCookies} />}
+        {page === "settings" && (
+          <SettingsPage
+            users={users}
+            onAddUser={addUser}
+            onUpdateUser={updateUser}
+            onDeleteUser={deleteUser}
+            onCookieUpload={uploadInstagramCookies}
+          />
+        )}
         {!navItems.some(([id]) => id === page) && <Navigate to="/dashboard" replace />}
       </section>
     </main>
@@ -553,6 +615,30 @@ function Instagram({ accounts, videos, selected, setSelected, onAdd, onEdit, onD
   const [editingId, setEditingId] = useState(null);
   const [editHandle, setEditHandle] = useState("");
   const [editUrls, setEditUrls] = useState("");
+  const [fetchAccountIds, setFetchAccountIds] = useState([]);
+
+  useEffect(() => {
+    setFetchAccountIds((prev) => {
+      const ids = accounts.map((account) => account.id);
+      if (!ids.length) return [];
+      const kept = prev.filter((id) => ids.includes(id));
+      return kept.length ? kept : ids;
+    });
+  }, [accounts]);
+
+  function toggleFetchAccount(id) {
+    setFetchAccountIds((items) =>
+      items.includes(id) ? items.filter((item) => item !== id) : [...items, id]
+    );
+  }
+
+  function selectAllFetchAccounts() {
+    setFetchAccountIds(accounts.map((account) => account.id));
+  }
+
+  function clearFetchAccountSelection() {
+    setFetchAccountIds([]);
+  }
 
   async function submit(event) {
     event.preventDefault();
@@ -594,13 +680,22 @@ function Instagram({ accounts, videos, selected, setSelected, onAdd, onEdit, onD
           <h1>Fetch latest public reels and choose what enters your editing pipeline.</h1>
         </div>
         <div className="actions">
-          <button onClick={onDiscover} disabled={!accounts.length || busy}><RefreshCcw size={18} /> Fetch latest</button>
+          <button
+            onClick={() => onDiscover(fetchAccountIds)}
+            disabled={!fetchAccountIds.length || busy}
+            title={fetchAccountIds.length ? `Fetch ${fetchAccountIds.length} selected source(s)` : "Select sources below first"}
+          >
+            <RefreshCcw size={18} /> Fetch latest {fetchAccountIds.length ? `(${fetchAccountIds.length})` : ""}
+          </button>
           <button className="primary" onClick={onDownload} disabled={!selected.length || busy}><Download size={18} /> Download {selected.length || ""}</button>
         </div>
       </header>
       <RetentionNotice hours={retentionHours}>
         Fetched reels are working data only — select the ones you want, then download or send them to the editor. Everything fetched here auto-deletes after {retentionHours} hours.
       </RetentionNotice>
+      <p className="fetch-hint">
+        Fetch only updates the sources you check. If you previously synced every handle and now want just a few in the list, use <strong>Clear fetched videos</strong> first so clips from unchecked sources are removed.
+      </p>
       <form className="account-form" onSubmit={submit}>
         <input value={handle} onChange={(event) => setHandle(event.target.value)} placeholder="@handle (optional if you paste reel URLs)" />
         <textarea value={urls} onChange={(event) => setUrls(event.target.value)} placeholder="Optional reel URLs, one per line" />
@@ -608,8 +703,12 @@ function Instagram({ accounts, videos, selected, setSelected, onAdd, onEdit, onD
       </form>
       {accounts.length > 0 && (
         <div className="account-toolbar">
-          <span>{accounts.length} source {accounts.length === 1 ? "account" : "accounts"}</span>
+          <span>
+            {fetchAccountIds.length} of {accounts.length} source{accounts.length === 1 ? "" : "s"} selected for fetch
+          </span>
           <div className="actions">
+            <button type="button" onClick={selectAllFetchAccounts}>Select all</button>
+            <button type="button" onClick={clearFetchAccountSelection}>Select none</button>
             <button onClick={onClearVideos}><RefreshCcw size={16} /> Clear fetched videos</button>
             <button className="danger" onClick={onClearAccounts}><Trash2 size={16} /> Clear all handles</button>
           </div>
@@ -617,7 +716,19 @@ function Instagram({ accounts, videos, selected, setSelected, onAdd, onEdit, onD
       )}
       <div className="account-grid">
         {accounts.map((account) => (
-          <article key={account.id} className="account">
+          <article key={account.id} className={`account ${fetchAccountIds.includes(account.id) ? "selected" : ""}`}>
+            <div className="account-fetch-row">
+              <div className="fetch-source-check">
+                <input
+                  type="checkbox"
+                  className="fetch-source-checkbox"
+                  id={`fetch-${account.id}`}
+                  checked={fetchAccountIds.includes(account.id)}
+                  onChange={() => toggleFetchAccount(account.id)}
+                />
+                <label className="fetch-source-label" htmlFor={`fetch-${account.id}`}>Include in fetch</label>
+              </div>
+            </div>
             {editingId === account.id ? (
               <div className="account-edit">
                 <input value={editHandle} onChange={(event) => setEditHandle(event.target.value)} placeholder="@handle" />
@@ -629,8 +740,8 @@ function Instagram({ accounts, videos, selected, setSelected, onAdd, onEdit, onD
               </div>
             ) : (
               <>
-                <strong>@{account.handle}</strong>
-                <span>{account.mode === "urls" ? `${account.urls.length} manual URLs` : account.mode === "mock" ? "mock discovery adapter" : "live reel scraping"}</span>
+                <strong>{accountSourceTitle(account)}</strong>
+                <span>{accountSourceKind(account)}</span>
                 <div className="actions">
                   <button onClick={() => startEdit(account)}><Wand2 size={16} /> Edit</button>
                   <button className="danger" onClick={() => onDelete(account.id)}><Trash2 size={16} /> Delete</button>
@@ -653,7 +764,13 @@ function VideoGrid({ videos, selected, onToggle }) {
     <div className="video-grid">
       {videos.map((video) => (
         <article className={`video ${selected.includes(video.id) ? "selected" : ""}`} key={video.id} onClick={() => onToggle(video.id)}>
-          <img src={mediaUrl(video.thumbnailUrl)} alt="" />
+          {video.thumbnailUrl ? (
+            <img src={mediaUrl(video.thumbnailUrl)} alt="" referrerPolicy="no-referrer" />
+          ) : (
+            <div className="video-thumb-placeholder" aria-hidden="true">
+              <span>{video.reelId || video.title || "Reel"}</span>
+            </div>
+          )}
           <button aria-label="Select clip">{selected.includes(video.id) ? <Check size={18} /> : <Plus size={18} />}</button>
           <div>
             <strong>{video.title || video.filename}</strong>
@@ -1720,9 +1837,14 @@ function ExportQueue({ jobs, onRefresh, onDeleteJob, retentionHours }) {
   );
 }
 
-function SettingsPage({ users, onAddUser, onCookieUpload }) {
+function SettingsPage({ users, onAddUser, onUpdateUser, onDeleteUser, onCookieUpload }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editTheme, setEditTheme] = useState("dark");
+  const [editLanguage, setEditLanguage] = useState("en");
 
   async function submit(event) {
     event.preventDefault();
@@ -1731,17 +1853,39 @@ function SettingsPage({ users, onAddUser, onCookieUpload }) {
     setEmail("");
   }
 
+  function startEdit(user) {
+    setEditingId(user.id);
+    setEditName(user.name);
+    setEditEmail(user.email);
+    setEditTheme(user.preferences?.theme || "dark");
+    setEditLanguage(user.preferences?.language || "en");
+  }
+
+  async function saveEdit(userId) {
+    await onUpdateUser(userId, {
+      name: editName.trim(),
+      email: editEmail.trim(),
+      preferences: { theme: editTheme, language: editLanguage }
+    });
+    setEditingId(null);
+  }
+
+  async function removeUser(user) {
+    if (!window.confirm(`Remove user "${user.name}"?`)) return;
+    await onDeleteUser(user.id);
+  }
+
   return (
     <div className="panel">
       <header>
         <div>
           <p className="eyebrow">Local settings</p>
-          <h1>Manage local users, preferences, and future brand kit defaults.</h1>
+          <h1>Manage local users and optional Instagram session cookies.</h1>
         </div>
       </header>
       <form className="account-form" onSubmit={submit}>
         <input value={name} onChange={(event) => setName(event.target.value)} placeholder="User name" required />
-        <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="email@example.com" required />
+        <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="email@example.com" type="email" required />
         <button type="submit"><User size={18} /> Add user</button>
       </form>
       <section className="surface">
@@ -1755,8 +1899,33 @@ function SettingsPage({ users, onAddUser, onCookieUpload }) {
       <div className="account-grid">
         {users.map((user) => (
           <article className="account" key={user.id}>
-            <strong>{user.name}</strong>
-            <span>{user.email} · {user.preferences.theme}</span>
+            {editingId === user.id ? (
+              <div className="account-edit">
+                <input value={editName} onChange={(event) => setEditName(event.target.value)} placeholder="Name" />
+                <input value={editEmail} onChange={(event) => setEditEmail(event.target.value)} placeholder="Email" type="email" />
+                <label>
+                  Theme{" "}
+                  <select value={editTheme} onChange={(event) => setEditTheme(event.target.value)}>
+                    <option value="dark">Dark</option>
+                    <option value="light">Light</option>
+                  </select>
+                </label>
+                <input value={editLanguage} onChange={(event) => setEditLanguage(event.target.value)} placeholder="Language (e.g. en)" />
+                <div className="actions">
+                  <button type="button" className="primary" onClick={() => saveEdit(user.id)}><Check size={16} /> Save</button>
+                  <button type="button" onClick={() => setEditingId(null)}>Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <strong>{user.name}</strong>
+                <span>{user.email} · theme: {user.preferences?.theme || "dark"} · {user.preferences?.language || "en"}</span>
+                <div className="actions">
+                  <button type="button" onClick={() => startEdit(user)}><Wand2 size={16} /> Edit</button>
+                  <button type="button" className="danger" onClick={() => removeUser(user)}><Trash2 size={16} /> Delete</button>
+                </div>
+              </>
+            )}
           </article>
         ))}
       </div>

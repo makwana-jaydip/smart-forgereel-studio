@@ -88,7 +88,7 @@ function mapFeedItem(account, item) {
     reelId: code || null,
     sourceUrl: code ? `https://www.instagram.com/reel/${code}/` : null,
     videoUrl: pickVideoUrl(item),
-    thumbnailUrl: pickThumb(item) || `https://picsum.photos/seed/${encodeURIComponent(account.handle)}/640/960`,
+    thumbnailUrl: pickThumb(item),
     durationSec: Number(durationSec.toFixed(2)),
     views,
     createdAt: createdAt.toISOString(),

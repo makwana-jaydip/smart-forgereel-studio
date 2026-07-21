@@ -5,7 +5,7 @@ SmartForgeReel Studio is a local-first web application for video editors and soc
 ## Current Build
 
 - Dashboard with project, library, template, and export metrics
-- Multi-user local settings
+- **Users (Settings).** Add, edit (name, email, theme, language), and delete local users.
 - Multiple Instagram source accounts, each editable and deletable
 - Live public-reel scraping by handle (no login or cookies.txt required), manual reel URL mode, and a mock adapter
 - Handle is optional when reel URLs are pasted (source is labelled `manual-reels`)
@@ -258,6 +258,29 @@ Exports do **not** delete your downloaded reel the instant you render; you can t
 
 The window is set with `RETENTION_HOURS` in `server/.env` (default `6`; try `24` for a full day). The active value appears in the app and at `GET /api/config`.
 
+### How the 6-hour sweep works (step by step)
+
+1. **Timer** — On server start, `purgeExpired()` runs once, then again every **10 minutes**.
+2. **Cutoff** — `cutoff = now − RETENTION_HOURS` (default 6 hours).
+3. **Database** — For each row in `db.json` / SQLite, compare the timestamp in the table below. Expired rows are **removed from both** stores in the same pass.
+4. **Linked files** — When a removed row stores a file path (`localPath`, render `outputPath`, etc.), that file is deleted from disk.
+5. **Orphans** — Files under `downloads`, `uploads`, `renders`, `exports`, `thumbnails`, and `temp` whose **mtime** is older than the cutoff are deleted even if no DB row remains (prevents disk clutter).
+6. **Not swept** — Saved Instagram **accounts**, **users**, **templates** (and `storage/templates/` media for custom templates) are kept until you delete them in the UI.
+
+### Manual deletion (immediate, not waiting 6 hours)
+
+| Action | What it removes |
+|--------|------------------|
+| **Settings → Delete user** | That user record only |
+| **Instagram → Delete** on a source | Source + its fetched videos in the DB |
+| **Clear fetched videos** | All rows in the fetched-reels list (not library files) |
+| **Clear all handles** | All sources + all fetched reels |
+| **Library → Clear library** | All library assets + download records + their files |
+| **Library → delete one asset** | That asset row (file may remain until retention if path cleanup missed) |
+| **Export Queue → Remove** | That job + its rendered MP4 |
+| **Editor → Clear this edit** | Current project only |
+| **`POST /api/maintenance/reset-content`** | Videos, downloads, library assets, projects, export jobs, and working folders — **keeps** accounts, users, and built-in templates |
+
 ### Resetting or deleting the `storage/` folder
 
 **Yes, you can wipe local data** — useful for a fresh start or if something looks corrupted.
@@ -300,9 +323,10 @@ Follow these steps in order. This is the full flow from adding Instagram sources
 
 ### 3. Fetch the latest videos
 
-- Click **Fetch latest videos** (discover). For a live handle the app pulls that account's most recent reels (about 12, ordered newest first), scraping page by page and skipping non-video posts.
-- Each account is fetched independently. If one account is private or briefly rate-limited by Instagram, you get an on-screen note for that handle while the other accounts still load.
-- In `urls` mode you will see the reels for the URLs you pasted; in `mock` mode you will see sample videos.
+- On each source card, check **Include in fetch** (use **Select all** / **Select none** to choose many at once). **Fetch latest (N)** only runs for checked sources — you can keep 10 handles on file and refresh 3 today.
+- Click **Fetch latest**. For a live handle the app pulls that account's most recent reels (about 12, ordered newest first). Re-fetching a source replaces that source's previous fetched list; other sources' videos stay until retention or **Clear fetched videos**.
+- **Manual reel URLs** use Instagram's oEmbed API for the preview image when available (no random stock photos). If Instagram does not return a thumbnail, the grid shows a labeled placeholder until you download the reel.
+- Each account is fetched independently. If one account is private or briefly rate-limited by Instagram, you get an on-screen note for that handle while the others still load.
 
 
 
@@ -409,3 +433,88 @@ storage/
   db.json
   smartforgereel.sqlite
 ```
+
+## HTTP API reference
+
+Base URL: `http://127.0.0.1:4000` (or your `PORT` / `HOST` in `server/.env`). JSON bodies unless noted. Static files: `/storage/...`, `/defaults/...`.
+
+### Health & config
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/health` | `{ ok: true }` |
+| `GET` | `/api/config` | `{ retentionHours, defaultTemplateId }` |
+| `GET` | `/api/dashboard` | Project/library/export/template totals and recent items |
+
+### Users (Settings)
+
+| Method | Path | Body / notes |
+|--------|------|----------------|
+| `GET` | `/api/users` | List local users |
+| `POST` | `/api/users` | `{ name, email }` — creates user with default `preferences` |
+| `PATCH` | `/api/users/:id` | `{ name?, email?, preferences?: { theme?, language? } }` |
+| `DELETE` | `/api/users/:id` | Remove user |
+
+### Instagram sources & discovery
+
+| Method | Path | Body / notes |
+|--------|------|----------------|
+| `GET` | `/api/accounts` | List sources |
+| `POST` | `/api/accounts` | `{ handle?, mode?, urls?[] }` — handle or URLs required |
+| `PATCH` | `/api/accounts/:id` | Update handle, mode, or URL list |
+| `DELETE` | `/api/accounts/:id` | Delete source and its fetched videos |
+| `DELETE` | `/api/accounts` | Clear all sources and fetched videos |
+| `POST` | `/api/discover` | `{ accountIds?: string[], limit?: number }` — if `accountIds` omitted, fetches **all** sources; returns `{ videos, errors[] }` with the **full** fetched list after merge |
+| `GET` | `/api/videos` | Fetched reels (newest first) |
+| `DELETE` | `/api/videos` | Clear fetched reel list only |
+| `POST` | `/api/auth/instagram-session` | Multipart `cookies` — saves Netscape cookies to `storage/cache/instagram-cookies.txt` |
+
+### Downloads, library, uploads
+
+| Method | Path | Body / notes |
+|--------|------|----------------|
+| `POST` | `/api/downloads` | `{ videoIds: string[] }` — `yt-dlp` into library |
+| `POST` | `/api/uploads` | Multipart `media` — local file to library |
+| `GET` | `/api/library` | Query `?q=` search, `?source=` filter |
+| `GET` | `/api/assets` | Same assets as library (unsorted) |
+| `PATCH` | `/api/library/:id` | Patch asset metadata |
+| `DELETE` | `/api/library/:id` | Remove one asset row |
+| `DELETE` | `/api/assets` | **Clear library** — all assets, downloads, files |
+
+### Templates
+
+| Method | Path | Body / notes |
+|--------|------|----------------|
+| `GET` | `/api/templates` | List templates |
+| `POST` | `/api/templates` | JSON or multipart (+ optional `file`) |
+| `PATCH` | `/api/templates/:id` | JSON or multipart (+ optional `file`) |
+| `DELETE` | `/api/templates/:id` | Fails for built-in `default: true` templates |
+
+### Projects & export
+
+| Method | Path | Body / notes |
+|--------|------|----------------|
+| `POST` | `/api/projects` | `{ videoIds?, assetIds?, headline?, template? }` |
+| `GET` | `/api/projects` | All projects (newest edit first) |
+| `GET` | `/api/projects/:id` | One project |
+| `PATCH` | `/api/projects/:id` | Partial project update; sets `updatedAt` (retention clock) |
+| `DELETE` | `/api/projects/:id` | Delete project |
+| `POST` | `/api/projects/:id/render` | Optional body: `clipId`, trim, zoom, pan, `overlayImage`, `outro`, etc. — returns job `{ id, status }` |
+| `GET` | `/api/render-jobs` | Export queue |
+| `GET` | `/api/export` | Alias of render jobs |
+| `PATCH` | `/api/render-jobs/:id` | `{ action: "cancel" }` |
+| `DELETE` | `/api/render-jobs/:id` | Remove job and rendered file |
+
+### Maintenance
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/maintenance/reset-content` | Wipe working content; keeps accounts, users, default templates |
+
+## Roadmap (not in this release)
+
+- Live progress streaming for `yt-dlp` and FFmpeg jobs
+- Guided Instagram login instead of manual cookie upload
+- Optional PostgreSQL/Prisma backend for multi-user hosting
+- Stricter TypeScript across the codebase
+- Automated tests for download, upload, project, and export flows
