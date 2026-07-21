@@ -136,6 +136,43 @@ app.post("/api/users", ah(async (req, res) => {
   res.status(201).json(user);
 }));
 
+app.patch("/api/users/:id", ah(async (req, res) => {
+  const schema = z.object({
+    name: z.string().min(1).optional(),
+    email: z.string().email().optional(),
+    preferences: z
+      .object({
+        theme: z.enum(["dark", "light"]).optional(),
+        language: z.string().min(2).max(10).optional()
+      })
+      .optional()
+  });
+  const patch = schema.parse(req.body);
+  const user = await mutateStore((db) => {
+    const index = db.users.findIndex((item) => item.id === req.params.id);
+    if (index === -1) return null;
+    const current = db.users[index];
+    db.users[index] = {
+      ...current,
+      ...patch,
+      preferences: patch.preferences ? { ...current.preferences, ...patch.preferences } : current.preferences
+    };
+    return db.users[index];
+  });
+  if (!user) return res.status(404).json({ error: "User not found" });
+  res.json(user);
+}));
+
+app.delete("/api/users/:id", ah(async (req, res) => {
+  const existed = await mutateStore((db) => {
+    const before = db.users.length;
+    db.users = db.users.filter((item) => item.id !== req.params.id);
+    return before !== db.users.length;
+  });
+  if (!existed) return res.status(404).json({ error: "User not found" });
+  res.status(204).end();
+}));
+
 app.get("/api/accounts", ah(async (_req, res) => {
   const db = await readStore();
   res.json(db.accounts);
@@ -164,8 +201,14 @@ app.patch("/api/accounts/:id", ah(async (req, res) => {
   const account = await mutateStore((db) => {
     const index = db.accounts.findIndex((item) => item.id === req.params.id);
     if (index === -1) return null;
-    db.accounts[index] = { ...db.accounts[index], ...patch };
-    if (db.accounts[index].handle === "") db.accounts[index].handle = "manual-reels";
+    const next = { ...db.accounts[index], ...patch };
+    if (next.urls?.length) {
+      next.mode = "urls";
+    } else if (patch.urls !== undefined && !next.urls.length && next.mode === "urls") {
+      next.mode = "live";
+    }
+    if (next.handle === "") next.handle = "manual-reels";
+    db.accounts[index] = next;
     return db.accounts[index];
   });
   if (!account) return res.status(404).json({ error: "Account not found" });
@@ -214,13 +257,19 @@ app.post("/api/discover", ah(async (req, res) => {
   const discovered = perAccount.flat();
 
   await mutateStore((next) => {
+    const fetchedAccountIds = new Set(accounts.map((item) => item.id));
     next.videos = [
       ...discovered,
-      ...next.videos.filter((video) => !discovered.some((fresh) => fresh.sourceUrl === video.sourceUrl))
+      ...next.videos.filter(
+        (video) =>
+          !fetchedAccountIds.has(video.accountId) &&
+          !discovered.some((fresh) => fresh.sourceUrl === video.sourceUrl)
+      )
     ];
   });
 
-  const videos = discovered.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const dbAfter = await readStore();
+  const videos = dbAfter.videos.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   res.json({ videos, errors });
 }));
 
